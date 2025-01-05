@@ -4,9 +4,10 @@ Author: byh呀呀呀
 version: 
 Date: 2025-01-03 22:29:20
 LastEditors: byh呀呀呀
-LastEditTime: 2025-01-04 10:52:01
+LastEditTime: 2025-01-05 23:23:27
 '''
 
+import cv2
 import numpy as np
 
 
@@ -54,4 +55,43 @@ def threshold(X_bar, standard_X, mean, var, n):
     # z = (x̄ - μ) / (s / √n)
     # 这里的 alpha 取 0.05， z_alpha/0.025 = 1.96
     # 当 z > 1.96 时，认为是异常像素点
-    outliers2 = (t_test(X_bar, mean, var, n) > 1.96)
+    outliers2 = (t_test(X_bar, mean, var, n) > 2.56)
+    outliers = outliers1 * outliers2
+    return outliers1, outliers2, outliers
+
+
+# 联通区域检测
+def detect_connected_components(image, min_area=80, top_n=2):
+    '''
+    检测联通区域
+    :param image: 输入图像
+    :param min_area: 最小区域面积
+    :param top_n: 保留的最大区域数量
+    :return: 保留最大区域的灰度图像, 带有边界框的图像, 边界框坐标列表
+    '''
+    # 连通区域检测
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(image, connectivity=8)
+    
+    output_image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+
+    largest_regions = np.zeros_like(image)
+
+    areas = []
+    for label in range(1, num_labels):
+        area = stats[label, cv2.CC_STAT_AREA]
+        if area >= min_area:
+            areas.append((label, area))
+
+    areas = sorted(areas, key=lambda x: x[1], reverse=True)[:top_n]
+
+    bounding_boxes = []
+    for label, area in areas:
+        # 保留最大区域
+        largest_regions[labels == label] = 255
+        x, y, w, h, _ = stats[label]
+        # 绘制边界框
+        cv2.rectangle(output_image, (x, y), (x + w, y + h), (0, 255, 0), 2)
+        # 记录边界框坐标
+        bounding_boxes.append((x, y, x + w, y + h))
+
+    return largest_regions, output_image, bounding_boxes
