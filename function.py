@@ -4,7 +4,7 @@ Author: byh呀呀呀
 version: 
 Date: 2025-01-03 20:42:15
 LastEditors: byh呀呀呀
-LastEditTime: 2025-01-07 22:58:40
+LastEditTime: 2025-01-17 23:57:52
 '''
 
 
@@ -15,8 +15,7 @@ from tqdm import tqdm
 import argparse
 import utils.statistic as statistic
 from itertools import zip_longest
-import concurrent.futures
-
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 class remove_foreground():
     def __init__(self, **kwargs):
@@ -114,8 +113,8 @@ class remove_foreground():
         remove = []
         for i in tqdm(range(min(images_array.shape[0], self.total_frames)), desc="get mask"):
             # 使用 remove_function 对每一帧进行去除操作
-            if i < 5:
-                gray_first_frame = cv2.cvtColor(images_array[i+40], cv2.COLOR_BGR2GRAY)   
+            if i < 6:
+                gray_first_frame = cv2.cvtColor(images_array[30], cv2.COLOR_BGR2GRAY)   
             else :    
                 gray_first_frame = cv2.cvtColor(images_array[0], cv2.COLOR_BGR2GRAY)   
             gray_frame = cv2.cvtColor(images_array[i], cv2.COLOR_BGR2GRAY)
@@ -124,8 +123,25 @@ class remove_foreground():
             one[outliers] = 255
             remove.append(one)
         return remove
+    
 
+    # add parallel make mask
+    def get_mask_parallel(self, images_array):
+        print('get mask ...')
+        remove = []
+        with ThreadPoolExecutor() as executor:
+            # 创建一个字典，用于保存future对象和其对应的索引
+            future_to_index = {executor.submit(self.remove_function, i, images_array): i for i in range(min(images_array.shape[0], self.total_frames))}
+            for future in as_completed(future_to_index):
+                index = future_to_index[future]
+                try:
+                    mask = future.result()
+                    remove.append(mask)
+                except Exception as exc:
+                    print(f'Frame {index} generated an exception: {exc}')
+        return remove
 
+    
 
     def process_video_frames(self, images_array, mask_list):
         """
@@ -138,65 +154,62 @@ class remove_foreground():
         返回：
             image_files: 处理后的图像列表。
         """
-        image_files = []
+        image_files = [None] * len(images_array) 
 
-        def process_frame(i, images_array, mask_list, n_frame=300):
-            """
-            处理单帧图像。
-            """
-            # 调用 remove_function 对每一帧进行处理
+        def process_frame(args):
+            i, images_array, mask_list, n_frame = args
             image = self.remove_function(images_array, mask_list, i, n_frame)
-            return image
-        # max_workers=10
-        with concurrent.futures.ThreadPoolExecutor(max_workers = 3) as executor:
-            # 这里的 'min(images_array.shape[0], self.total_frames)' 是处理的最大帧数
+            return i, image
+
+        with ThreadPoolExecutor(max_workers=3) as executor:
             futures = [
-                executor.submit(process_frame, i, images_array, mask_list) 
+                executor.submit(process_frame, (i, images_array, mask_list, self.total_frames))
                 for i in range(min(images_array.shape[0], self.total_frames))
             ]
-            # 使用 tqdm 来显示进度
-            for future in tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc="Processing frames"):
-                image = future.result()  # 获取每一帧的处理结果
-                image_files.append(image)   
-        # 返回处理后的所有帧
+            for future in tqdm(as_completed(futures), total=len(futures), desc="Processing frames"):
+                i, image = future.result()  
+                image_files[i] = image  
         return image_files
 
 
 
-    def remove_function(self, image_files, remove, frame_idx, n_frame = 30):
+    def remove_function(self, image_files, remove, frame_idx, n_frame=30):
         frame = image_files[frame_idx]
         current_mask = remove[frame_idx]
         gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
+        # 计算边界索引
         lower_idx = max(0, frame_idx - n_frame)
         upper_idx = min(len(remove), frame_idx + n_frame + 1)
 
+        # 创建一个与 frame 大小相同的布尔数组
         current_white_area = current_mask == 255
-        
-        for offset in range(1, n_frame + 1):
-            # 向前遍历
-            prev_idx = frame_idx - offset
-            if prev_idx > lower_idx and prev_idx != 0 and prev_idx != 40: 
-                if np.any(current_white_area & (remove[prev_idx] == 0)): 
-                    current_white_area_3d = np.repeat(current_white_area[:, :, np.newaxis], 3, axis=2)
-                    frame[current_white_area_3d] = image_files[prev_idx][current_white_area_3d]
-                    current_white_area &= ~(remove[prev_idx] == 0) 
+        current_white_area_3d = np.repeat(current_white_area[:, :, np.newaxis], 3, axis=2)
 
-            next_idx = frame_idx + offset
-            if next_idx < upper_idx and next_idx != 0 and next_idx != 40:  
-                if np.any(current_white_area & (remove[next_idx] == 0)):  
-                    current_white_area_3d = np.repeat(current_white_area[:, :, np.newaxis], 3, axis=2)
-                    frame[current_white_area_3d] = image_files[next_idx][current_white_area_3d]
-                    current_white_area &= ~(remove[next_idx] == 0) 
+        # 只在当前白色区域不为空时进行操作
+        if np.any(current_white_area):
+            for offset in range(1, n_frame + 1):
+                # 向前遍历
+                prev_idx = frame_idx - offset
+                if lower_idx <= prev_idx < frame_idx and prev_idx != 20 and prev_idx != 0:
+                    if np.any(current_white_area & (remove[prev_idx] == 0)):
+                        frame[current_white_area_3d & (remove[prev_idx][:, :, np.newaxis] == 0)] = image_files[prev_idx][current_white_area_3d & (remove[prev_idx][:, :, np.newaxis] == 0)]
+                        current_white_area &= ~(remove[prev_idx] == 0)
 
-        if np.any(current_white_area):  # 只有剩余的白色区域才需要进行均值替换
-            current_white_area_3d = np.repeat(current_white_area[:, :, np.newaxis], 3, axis=2)
-            if self.mean_compensation:
-                mean = self.mean + np.sqrt(self.var / 255) * (- statistic.adjust_mean(gray_frame, remove[frame_idx], self.mean, self.var))
-            else:
-                mean = self.mean
-            # 用均值替换剩余的白色区域
-            frame[current_white_area_3d] = mean[current_white_area_3d]
+                # 向后遍历
+                next_idx = frame_idx + offset
+                if frame_idx < next_idx < upper_idx and next_idx != 20 and prev_idx != 0:
+                    if np.any(current_white_area & (remove[next_idx] == 0)):
+                        frame[current_white_area_3d & (remove[next_idx][:, :, np.newaxis] == 0)] = image_files[next_idx][current_white_area_3d & (remove[next_idx][:, :, np.newaxis] == 0)]
+                        current_white_area &= ~(remove[next_idx] == 0)
+
+            # 如果还有剩余的白色区域，用均值替换
+            if np.any(current_white_area):
+                if self.mean_compensation:
+                    mean = self.mean + np.sqrt(self.var / 255) * (- self.statistic.adjust_mean(gray_frame, remove[frame_idx], self.mean, self.var))
+                else:
+                    mean = self.mean
+                frame[current_white_area_3d] = mean[current_white_area_3d]
 
         return frame
 

@@ -4,7 +4,7 @@ Author: byh呀呀呀
 version: 
 Date: 2025-01-03 22:29:20
 LastEditors: byh呀呀呀
-LastEditTime: 2025-01-07 22:36:20
+LastEditTime: 2025-01-17 23:35:38
 '''
 
 import cv2
@@ -12,9 +12,10 @@ import numpy as np
 
 # 初始化全局参数
 global_param1 = 1  # 腐蚀次数
-global_param2 = 2  # 膨胀次数
+global_param2 = 5  # 膨胀次数
 global_param3 = 5  # 卷积核大小
-global_pixel_threshold = 10  # 阈值1
+global_pixel_threshold = 20
+  # 阈值1
 global_z = 1.96  # z_alpha/0.025 = 1.96
 
 def compute_image_statistics(frames_list):
@@ -92,7 +93,7 @@ def threshold(X_bar, standard_X, mean, var, n):
 
     # Step 3: 使用膨胀操作找到被包围的区域 (值为 1 且被交集包围的区域)
     kernel = np.ones((23, 23), np.uint8)  
-    dilated_mask = cv2.dilate(intersection_mask, kernel, iterations=3)  # 膨胀交集区域
+    dilated_mask = cv2.dilate(intersection_mask, kernel, iterations=7)  # 膨胀交集区域
 
     # Step 4: 仅保留那些在膨胀后的区域内的 1
     bordering_mask = (combined_mask == 1) & (dilated_mask == 1)  # 找到交集区域外的区域，但被包围
